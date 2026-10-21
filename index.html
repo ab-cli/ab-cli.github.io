@@ -73,6 +73,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   let x=86,target=86,pointerY=60,gazeX=120,gazeY=45,facing=1,inside=false,lean=0,squat=0;
   let state='idle',since=0,last=0,phase=0,raf=0,visible=true,leaveTimer;
   let hopFrom=86,hopTo=86,highPoke=false,lastProbeX=86,lastProbeY=60;
+  let mobileDone=false,mobileWaveTime=0;
   const setState=(s,t)=>{if(state!==s){state=s;since=t;area.dataset.state=s;}};
   function pokeReach(u){
     const stops=[[0,0],[.30,1],[.46,.70],[.64,1],[.77,1],[1,0]];
@@ -97,6 +98,10 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
       const footX=step,footY=108-lift;
       line([[0,hipY],[step*.45+4+squat*12,(hipY+footY)/2-squat*6],[footX,footY],[footX+5,footY]]);
       if(startled){line([[shoulderX,shoulderY+2],[shoulderX+side*14,shoulderY-6],[shoulderX+side*20,shoulderY-17]]);}
+      else if(state==='mobile-wave'&&side===1){
+        const wag=Math.sin(mobileWaveTime*13)*5;
+        line([[shoulderX,shoulderY+2],[shoulderX+14,shoulderY-5],[shoulderX+20+wag,shoulderY-22]]);
+      }
       else if(side===1&&lean>.01){
         let elbow=[shoulderX+12,shoulderY+15],hand=[hx+8,hy+9];
         if(state==='poking'){
@@ -121,8 +126,21 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     Object.assign(area.dataset,{facing:String(facing),x:x.toFixed(2),squat:squat.toFixed(2),jump:jump.toFixed(2)});
   }
   function tick(t){
-    raf=0;if(!visible||document.hidden||reduce.matches||!fine.matches)return;
+    raf=0;if(!visible||document.hidden||reduce.matches)return;
     const dt=Math.min((t-(last||t))/1000,.04);last=t;let moving=false;
+    if(!fine.matches){
+      if(mobileDone)return;
+      if(state==='idle')setState('mobile-walk',t);
+      if(state==='mobile-walk'){
+        x=Math.min(158,x+dt*48);phase+=dt*8;moving=x<158;facing=1;
+        if(!moving){mobileWaveTime=0;setState('mobile-wave',t);}
+      }else if(state==='mobile-wave'){
+        mobileWaveTime+=dt;
+        if(mobileWaveTime>=1.4){mobileDone=true;setState('idle',t);}
+      }
+      gazeX=state==='mobile-wave'?x+1:x+50;gazeY=36;
+      draw(t,moving);if(!mobileDone)raf=requestAnimationFrame(tick);return;
+    }
     if(state==='startled'){
       x=mix(hopFrom,hopTo,smooth((t-since)/620));
       if(t-since>=620)setState('recovering',t);
@@ -154,7 +172,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     draw(t,moving);
     if(inside||['returning','startled','recovering'].includes(state)||lean>.01||squat>.01)raf=requestAnimationFrame(tick);
   }
-  function start(){if(!raf&&visible&&!document.hidden&&!reduce.matches&&fine.matches){last=0;raf=requestAnimationFrame(tick);}}
+  function start(){if(!raf&&visible&&!document.hidden&&!reduce.matches&&(fine.matches||!mobileDone)){last=0;raf=requestAnimationFrame(tick);}}
   function coords(e){const r=svg.getBoundingClientRect();return [(e.clientX-r.left)/r.width*320,(e.clientY-r.top)/r.height*120];}
   function point(e){
     if(e.pointerType==='touch'||reduce.matches||!fine.matches)return;
@@ -175,14 +193,14 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     const away=Math.abs(x-px)>2?Math.sign(x-px):-facing;
     hopTo=clamp(x+away*42,38,282);setState('startled',performance.now());start();
   });
-  function leave(){inside=false;clearTimeout(leaveTimer);leaveTimer=setTimeout(()=>{
+  function leave(){if(!fine.matches)return;inside=false;clearTimeout(leaveTimer);leaveTimer=setTimeout(()=>{
     if(!['startled','recovering'].includes(state))setState('returning',performance.now());start();
   },700);}
   area.addEventListener('pointerleave',leave);area.addEventListener('pointercancel',leave);
-  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);inside=false;x=86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
-  reduce.addEventListener('change',reset);fine.addEventListener('change',reset);
+  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);inside=false;x=!fine.matches&&mobileDone?158:86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
+  reduce.addEventListener('change',()=>{reset();start();});fine.addEventListener('change',()=>{reset();start();});
   new IntersectionObserver(([e])=>{visible=e.isIntersecting;if(!visible)reset();else start();}).observe(area);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)reset();});reset();
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)reset();else start();});reset();
 })();
 </script>
 </body> </html>
