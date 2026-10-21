@@ -165,6 +165,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   let state='idle',since=0,last=0,phase=0,raf=0,visible=true,leaveTimer;
   let hopFrom=86,hopTo=86,lastProbeX=86,lastProbeY=60;
   let mobileWaveTime=0,armPose=[],armBlend=1;
+  let visualFacing=1,turnFrom=1,turnTo=1,turnElapsed=.24,eyeX=0,eyeY=0;
   const setState=(s,t)=>{if(state!==s){state=s;since=t;area.dataset.state=s;}};
   function pokeReach(u){
     const stops=[[0,0],[.30,1],[.46,.70],[.64,1],[.77,1],[1,0]];
@@ -188,7 +189,9 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
         pts=pts.map(([a,b],i)=>previous&&i>0?[mix(previous[i][0],a,armBlend),mix(previous[i][1],b,armBlend)]:[a,b]);
         armPose[part]=pts.map(p=>[...p]);
       }
-      paths.push(pts.map(([a,b],i)=>(i?'L':'M')+(x+facing*a)+','+(b-jump)).join(' '));
+      const front=1-Math.abs(visualFacing);
+      const spread=(part===1?-5:part===3?5:part===2?-9:part===4?9:0)*front;
+      paths.push(pts.map(([a,b],i)=>(i?'L':'M')+(x+visualFacing*a+(i>0?spread:0))+','+(b-jump)).join(' '));
     };
     line([[hx,hy+10],[shoulderX,shoulderY],[0,hipY]]);
     for(const side of [-1,1]){
@@ -219,10 +222,11 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
       }
     }
     body.setAttribute('d',paths.join(' '));
-    const dx=gazeX-(x+facing*hx),dy=gazeY-(hy-jump);
-    const lookX=clamp(dx/35,-1,1),lookY=clamp(dy/45,-1,1);
-    head.setAttribute('transform',`translate(${x+facing*hx},${hy-jump}) rotate(${lookX*lookY*12})`);
-    eyes.setAttribute('transform',`translate(${lookX*3},${lookY*2.5}) scale(${startled?1.35:1})`);
+    const dx=gazeX-(x+visualFacing*hx),dy=gazeY-(hy-jump);
+    eyeX=mix(eyeX,clamp(dx/35,-1,1),armBlend);eyeY=mix(eyeY,clamp(dy/45,-1,1),armBlend);
+    head.setAttribute('transform',`translate(${x+visualFacing*hx},${hy-jump}) rotate(${eyeX*eyeY*12})`);
+    eyes.setAttribute('transform',`translate(${eyeX*3},${eyeY*2.5}) scale(${startled?1.35:1})`);
+    area.dataset.turn=visualFacing.toFixed(3);
     Object.assign(area.dataset,{facing:String(facing),x:x.toFixed(2),squat:squat.toFixed(2),jump:jump.toFixed(2)});
   }
   function tick(t){
@@ -232,7 +236,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     if(!entranceRunning)mobileWaveTime+=dt;
     if(!inside){gazeX=x+1;gazeY=36;}
     if(!fine.matches){
-      setState('idle',t);facing=1;draw(t);raf=requestAnimationFrame(tick);return;
+      setState('idle',t);facing=1;visualFacing=1;draw(t);raf=requestAnimationFrame(tick);return;
     }
     if(state==='startled'){
       x=mix(hopFrom,hopTo,smooth((t-since)/620));
@@ -250,7 +254,9 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
         const inspecting=['examining','poking','curious'].includes(state);
         const walkThreshold=inspecting?38:25.5;
         if(Math.abs(target-x)>walkThreshold&&Math.abs(destination-x)>.5){
-          setState('walking',t);x+=Math.sign(destination-x)*Math.min(Math.abs(destination-x),dt*65);moving=true;
+          setState('walking',t);
+          moving=facing*visualFacing>.85;
+          if(moving)x+=Math.sign(destination-x)*Math.min(Math.abs(destination-x),dt*65);
         }else{
           if(state==='walking')setState('examining',t);
           const shoulderX=1+lean*6-squat*2,shoulderY=50+squat*25+lean*2;
@@ -262,16 +268,19 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
         }
       }
     }else if(state==='returning'){
-      if(Math.abs(x-86)>1){facing=Math.sign(86-x);x+=facing*Math.min(Math.abs(86-x),dt*52);moving=true;}
+      if(Math.abs(x-86)>1){facing=Math.sign(86-x);moving=facing*visualFacing>.85;if(moving)x+=facing*Math.min(Math.abs(86-x),dt*52);}
       else setState('idle',t);
     }
-    if(!moving&&!['startled','recovering'].includes(state)&&Math.abs(gazeX-x)>4)facing=Math.sign(gazeX-x);
+    if(!moving&&!['startled','recovering','returning','walking'].includes(state)&&Math.abs(gazeX-x)>4)facing=Math.sign(gazeX-x);
     const examining=inside&&['examining','poking','curious'].includes(state);
     lean=mix(lean,examining?1:0,Math.min(1,dt*8));
     squat=mix(squat,examining?clamp((pointerY-70)/30,0,1):0,Math.min(1,dt*8));
     x=clamp(x,minX(),maxX());if(moving)phase+=dt*8;
     // Idle greeting always uses the screen-right arm, regardless of return direction.
     if(!inside&&state==='idle')facing=1;
+    if(facing!==turnTo){turnFrom=visualFacing;turnTo=facing;turnElapsed=0;}
+    turnElapsed=Math.min(.24,turnElapsed+dt);
+    visualFacing=mix(turnFrom,turnTo,smooth(turnElapsed/.24));
     draw(t,moving);
     raf=requestAnimationFrame(tick);
   }
@@ -295,7 +304,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     if(!['startled','recovering'].includes(state))setState('returning',performance.now());start();
   },700);}
   area.addEventListener('pointerleave',leave);area.addEventListener('pointercancel',leave);
-  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);armPose=[];armBlend=1;inside=false;x=86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
+  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);armPose=[];armBlend=1;visualFacing=1;turnFrom=1;turnTo=1;turnElapsed=.24;eyeX=0;eyeY=0;inside=false;x=86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
   reduce.addEventListener('change',()=>{if(entranceRunning)finishEntrance();reset();start();});fine.addEventListener('change',()=>{reset();start();});
   new IntersectionObserver(([e])=>{
     visible=e.isIntersecting;
