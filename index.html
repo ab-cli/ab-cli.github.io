@@ -72,6 +72,10 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   const portrait=document.querySelector('#portrait-thanks img');
   let viewLeft=0,viewWidth=320;
   const minX=()=>viewWidth===320?38:viewLeft+24,maxX=()=>viewWidth===320?282:viewLeft+viewWidth-28;
+  function floorPath(){
+    const left=viewLeft+12,span=viewWidth-24;
+    return `M${left},110.4 L${left+span*.16},109.9 L${left+span*.37},110.6 L${left+span*.59},110.1 L${left+span*.81},110.8 L${left+span},110.3`;
+  }
   function positionCompanion(){
     const range=document.createRange();range.selectNodeContents(title);
     const rects=[...range.getClientRects()];if(!rects.length)return;
@@ -82,6 +86,7 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     viewLeft=stacked?48:0;viewWidth=stacked?160:320;
     graphic.setAttribute('viewBox',`${viewLeft} 0 ${viewWidth} 120`);
     graphic.style.aspectRatio=`${viewWidth} / 120`;
+    const ground=graphic.querySelector('.stickman-floor');if(ground)ground.setAttribute('d',floorPath());
     if(stacked){
       const left=photo.right+12;
       const width=Math.min(132,document.documentElement.clientWidth-20-left);
@@ -114,12 +119,52 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   const svg=area.querySelector('svg'),body=area.querySelector('.stickman-body');
   const head=area.querySelector('.stickman-head'),eyes=area.querySelector('.stickman-eyes');
   const reduce=matchMedia('(prefers-reduced-motion: reduce)'),fine=matchMedia('(hover: hover) and (pointer: fine)');
+  const floor=document.createElementNS('http://www.w3.org/2000/svg','path');
+  floor.setAttribute('class','stickman-floor');floor.setAttribute('d',floorPath());
+  floor.setAttribute('fill','none');floor.setAttribute('stroke','currentColor');
+  floor.setAttribute('stroke-width','1.3');floor.setAttribute('stroke-linecap','round');
+  floor.setAttribute('stroke-linejoin','round');floor.setAttribute('opacity','.3');svg.prepend(floor);
+  let entrancePlayed=false,entranceRunning=false,entranceAnimations=[],drawing=null;
+  svg.style.opacity='0';
+  function finishEntrance(){
+    entranceRunning=false;svg.style.opacity='';body.style.opacity='';head.style.opacity='';floor.style.opacity='';
+    entranceAnimations.forEach(a=>a.cancel());entranceAnimations=[];
+    if(drawing){drawing.remove();drawing=null;}
+    area.dataset.entrance=entrancePlayed?'complete':'pending';
+  }
+  function enter(){
+    if(entrancePlayed)return;
+    entrancePlayed=true;
+    if(reduce.matches){finishEntrance();return;}
+    entranceRunning=true;area.dataset.entrance='playing';
+    gazeX=x+1;gazeY=36;mobileWaveTime=0;draw(performance.now());
+    const ns='http://www.w3.org/2000/svg';
+    drawing=document.createElementNS(ns,'g');drawing.dataset.entranceDrawing='true';
+    drawing.setAttribute('fill','none');drawing.setAttribute('stroke','currentColor');
+    drawing.setAttribute('stroke-width','2.1');drawing.setAttribute('stroke-linecap','round');drawing.setAttribute('stroke-linejoin','round');
+    svg.append(drawing);body.style.opacity='0';head.style.opacity='0';floor.style.opacity='0';svg.style.opacity='1';
+    const segments=body.getAttribute('d').match(/M[^M]+/g);
+    const reverse=d=>d.slice(1).split('L').reverse().map((p,i)=>(i?'L':'M')+p).join(' ');
+    function trace(node,delay,duration){
+      node.setAttribute('pathLength','100');node.style.strokeDasharray='100';node.style.strokeDashoffset='100';
+      drawing.append(node);
+      const ink=node.dataset.floor==='true'?.3:1;
+      entranceAnimations.push(node.animate([{strokeDashoffset:100,opacity:0},{strokeDashoffset:99,opacity:ink,offset:.01},{strokeDashoffset:0,opacity:ink}],{delay:1100+delay,duration,easing:'ease-in-out',fill:'both'}));
+    }
+    function path(d,delay,duration){const n=document.createElementNS(ns,'path');n.setAttribute('d',d);trace(n,delay,duration);}
+    const floorStroke=floor.cloneNode();floorStroke.removeAttribute('class');floorStroke.removeAttribute('opacity');floorStroke.style.opacity='';floorStroke.dataset.floor='true';trace(floorStroke,0,350);
+    path(reverse(segments[1]),270,440);path(reverse(segments[3]),340,440);
+    path(reverse(segments[0]),700,370);
+    const circle=document.createElementNS(ns,'circle');circle.setAttribute('r','10');circle.setAttribute('transform',head.getAttribute('transform'));trace(circle,1060,360);
+    path(segments[2],1400,330);path(segments[4],1470,380);
+    Promise.all(entranceAnimations.map(a=>a.finished)).then(finishEntrance).catch(()=>{});
+  }
   const clamp=(n,a,b)=>Math.max(a,Math.min(b,n)),mix=(a,b,t)=>a+(b-a)*t;
   const smooth=t=>{t=clamp(t,0,1);return t*t*(3-2*t);};
   let x=86,target=86,pointerY=60,gazeX=120,gazeY=45,facing=1,inside=false,lean=0,squat=0;
   let state='idle',since=0,last=0,phase=0,raf=0,visible=true,leaveTimer;
   let hopFrom=86,hopTo=86,lastProbeX=86,lastProbeY=60;
-  let mobileWaveTime=0;
+  let mobileWaveTime=0,armPose=[],armBlend=1;
   const setState=(s,t)=>{if(state!==s){state=s;since=t;area.dataset.state=s;}};
   function pokeReach(u){
     const stops=[[0,0],[.30,1],[.46,.70],[.64,1],[.77,1],[1,0]];
@@ -135,7 +180,16 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     const hipY=78+squat*20-bob,shoulderX=1+lean*6-squat*2,shoulderY=50+squat*25-bob+lean*2;
     const hx=shoulderX+lean*3,hy=shoulderY-14;
     const paths=[];
-    const line=pts=>paths.push(pts.map(([a,b],i)=>(i?'L':'M')+(x+facing*a)+','+(b-jump)).join(' '));
+    const line=pts=>{
+      const part=paths.length;
+      // Blend elbows/wrists between wave, walk and inspection; shoulders stay attached.
+      if(part===2||part===4){
+        const previous=armPose[part];
+        pts=pts.map(([a,b],i)=>previous&&i>0?[mix(previous[i][0],a,armBlend),mix(previous[i][1],b,armBlend)]:[a,b]);
+        armPose[part]=pts.map(p=>[...p]);
+      }
+      paths.push(pts.map(([a,b],i)=>(i?'L':'M')+(x+facing*a)+','+(b-jump)).join(' '));
+    };
     line([[hx,hy+10],[shoulderX,shoulderY],[0,hipY]]);
     for(const side of [-1,1]){
       const angle=phase+(side===1?0:Math.PI),step=moving?Math.cos(angle)*13:side*6;
@@ -174,7 +228,8 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   function tick(t){
     raf=0;if(!visible||document.hidden||reduce.matches)return;
     const dt=Math.min((t-(last||t))/1000,.04);last=t;let moving=false;
-    mobileWaveTime+=dt;
+    armBlend=1-Math.exp(-dt/0.10);
+    if(!entranceRunning)mobileWaveTime+=dt;
     if(!inside){gazeX=x+1;gazeY=36;}
     if(!fine.matches){
       setState('idle',t);facing=1;draw(t);raf=requestAnimationFrame(tick);return;
@@ -223,14 +278,14 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
   function start(){if(!raf&&visible&&!document.hidden&&!reduce.matches){last=0;raf=requestAnimationFrame(tick);}}
   function coords(e){const r=svg.getBoundingClientRect();return [viewLeft+(e.clientX-r.left)/r.width*viewWidth,(e.clientY-r.top)/r.height*120];}
   function point(e){
-    if(e.pointerType==='touch'||reduce.matches||!fine.matches)return;
+    if(entranceRunning||e.pointerType==='touch'||reduce.matches||!fine.matches)return;
     const [px,py]=coords(e);target=clamp(px,viewLeft+8,viewLeft+viewWidth-8);pointerY=clamp(py,0,120);gazeX=px;gazeY=py;
     if(state==='curious'&&Math.hypot(target-lastProbeX,pointerY-lastProbeY)>12)setState('examining',performance.now());
     inside=true;clearTimeout(leaveTimer);start();
   }
   area.addEventListener('pointerenter',point);area.addEventListener('pointermove',point);
   area.addEventListener('click',e=>{
-    if(reduce.matches||!fine.matches||['startled','recovering'].includes(state))return;
+    if(entranceRunning||reduce.matches||!fine.matches||['startled','recovering'].includes(state))return;
     const [px,py]=coords(e);if(Math.abs(px-x)>25||py<24+squat*25||py>113)return;
     clearTimeout(leaveTimer);hopFrom=x;
     const away=Math.abs(x-px)>2?Math.sign(x-px):-facing;
@@ -240,10 +295,14 @@ body.editorial .education-date { color:var(--muted); font-size:12px; white-space
     if(!['startled','recovering'].includes(state))setState('returning',performance.now());start();
   },700);}
   area.addEventListener('pointerleave',leave);area.addEventListener('pointercancel',leave);
-  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);inside=false;x=86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
-  reduce.addEventListener('change',()=>{reset();start();});fine.addEventListener('change',()=>{reset();start();});
-  new IntersectionObserver(([e])=>{visible=e.isIntersecting;if(!visible)reset();else start();}).observe(area);
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)reset();else start();});reset();
+  function reset(){cancelAnimationFrame(raf);raf=0;clearTimeout(leaveTimer);armPose=[];armBlend=1;inside=false;x=86;lean=0;squat=0;facing=1;gazeX=120;gazeY=45;setState('idle',performance.now());draw(0);}
+  reduce.addEventListener('change',()=>{if(entranceRunning)finishEntrance();reset();start();});fine.addEventListener('change',()=>{reset();start();});
+  new IntersectionObserver(([e])=>{
+    visible=e.isIntersecting;
+    if(!visible){if(entranceRunning)finishEntrance();reset();}
+    else {enter();start();}
+  }).observe(area);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden){if(entranceRunning)finishEntrance();reset();}else start();});reset();
 })();
 </script>
 </body> </html>
